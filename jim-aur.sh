@@ -113,10 +113,10 @@ fi
 print_info "Adding repository to $PACMAN_CONF..."
 if grep -q "^\[core\]" "$PACMAN_CONF"; then
     # Insert before [core] section
-    sed -i "/^\[core\]/i [$REPO_NAME]\nServer = $REPO_URL\n" "$PACMAN_CONF"
+    sed -i "/^\[core\]/i [$REPO_NAME]\nServer = $REPO_URL\nSigLevel = Optional TrustAll\n" "$PACMAN_CONF"
 else
     # Append to end of file if [core] not found
-    echo -e "\n[$REPO_NAME]\nServer = $REPO_URL" >> "$PACMAN_CONF"
+    echo -e "\n[$REPO_NAME]\nServer = $REPO_URL\nSigLevel = Optional TrustAll" >> "$PACMAN_CONF"
 fi
 
 print_success "Repository added to $PACMAN_CONF"
