@@ -4,7 +4,8 @@
 # Author: James "Jim" Ed Randson
 # These repositories are running under OBS (openSUSE Build Service)
 
-set -e  # Exit on any error
+# Remove set -e to prevent unexpected exits
+# set -e
 
 # Clear terminal for clean start
 clear
@@ -41,6 +42,10 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+print_debug() {
+    echo -e "${CYAN}[DEBUG]${NC} $1"
+}
+
 print_header() {
     echo -e "${MAGENTA}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${MAGENTA}║${NC}         ${CYAN}Jim AUR Repository Setup & Update Tool${NC}         ${MAGENTA}║${NC}"
@@ -51,7 +56,14 @@ print_header() {
 
 # Function to check if repository exists
 check_repo_exists() {
-    if grep -q "^\[$REPO_NAME\]" "$PACMAN_CONF"; then
+    print_debug "Checking if repository exists in $PACMAN_CONF..."
+    
+    if [ ! -f "$PACMAN_CONF" ]; then
+        print_error "pacman.conf not found at $PACMAN_CONF"
+        return 1
+    fi
+    
+    if grep -q "^\[$REPO_NAME\]" "$PACMAN_CONF" 2>/dev/null; then
         REPO_EXISTS=true
         print_info "Repository $REPO_NAME found in configuration"
         return 0
@@ -74,19 +86,21 @@ setup_gpg_key() {
     
     # Download and process the key
     key=$(curl -fsSL "$KEY_URL" 2>/dev/null)
-    if [[ $? -ne 0 ]] || [[ -z "$key" ]]; then
-        print_error "Failed to download GPG key"
-        print_warning "Continuing without GPG key setup..."
+    local curl_exit=$?
+    
+    if [[ $curl_exit -ne 0 ]] || [[ -z "$key" ]]; then
+        print_warning "Failed to download GPG key (curl exit code: $curl_exit)"
+        print_info "Repository will use 'Optional TrustAll' signature level"
         echo "none"
         return 0
     fi
     
     print_info "Processing GPG key..."
-    fingerprint=$(gpg --quiet --with-colons --import-options show-only --import --fingerprint <<< "${key}" 2>/dev/null | awk -F: '$1 == "fpr" { print $10 }')
+    fingerprint=$(gpg --quiet --with-colons --import-options show-only --import --fingerprint <<< "${key}" 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
     
     if [[ -z "$fingerprint" ]]; then
         print_warning "Failed to extract key fingerprint"
-        print_warning "Continuing without GPG key setup..."
+        print_info "Repository will use 'Optional TrustAll' signature level"
         echo "none"
         return 0
     fi
@@ -99,10 +113,18 @@ setup_gpg_key() {
     
     # Add and sign the key
     print_info "Adding GPG key to pacman keyring..."
-    pacman-key --add - <<< "${key}" 2>/dev/null || print_warning "Key may already exist"
+    if pacman-key --add - <<< "${key}" 2>/dev/null; then
+        print_success "GPG key added"
+    else
+        print_warning "Key may already exist or failed to add"
+    fi
     
     print_info "Locally signing the key..."
-    pacman-key --lsign-key "${fingerprint}" 2>/dev/null || print_warning "Key signing skipped"
+    if pacman-key --lsign-key "${fingerprint}" 2>/dev/null; then
+        print_success "Key signed successfully"
+    else
+        print_warning "Key signing failed or already signed"
+    fi
     
     print_success "GPG key setup completed"
     echo "$fingerprint"
@@ -112,14 +134,30 @@ setup_gpg_key() {
 add_repository() {
     print_info "Adding repository to $PACMAN_CONF..."
     
+    # Verify pacman.conf exists and is writable
+    if [ ! -f "$PACMAN_CONF" ]; then
+        print_error "Cannot find $PACMAN_CONF"
+        return 1
+    fi
+    
+    if [ ! -w "$PACMAN_CONF" ]; then
+        print_error "$PACMAN_CONF is not writable"
+        return 1
+    fi
+    
     # Backup pacman.conf first
     print_info "Creating backup of $PACMAN_CONF..."
     BACKUP_FILE="$PACMAN_CONF.backup.$(date +%Y%m%d_%H%M%S)"
-    cp "$PACMAN_CONF" "$BACKUP_FILE"
-    print_success "Backup created: $BACKUP_FILE"
+    
+    if cp "$PACMAN_CONF" "$BACKUP_FILE" 2>/dev/null; then
+        print_success "Backup created: $BACKUP_FILE"
+    else
+        print_error "Failed to create backup"
+        return 1
+    fi
     
     # Check if repository already exists (double check)
-    if grep -q "^\[$REPO_NAME\]" "$PACMAN_CONF"; then
+    if grep -q "^\[$REPO_NAME\]" "$PACMAN_CONF" 2>/dev/null; then
         print_warning "Repository section already exists in $PACMAN_CONF"
         print_info "Skipping repository addition"
         return 0
@@ -128,28 +166,65 @@ add_repository() {
     # Add repository to pacman.conf (before [core] repository for priority)
     print_info "Writing repository configuration..."
     
+    # Create temporary file with new content
+    TEMP_CONF=$(mktemp)
+    
     if grep -q "^\[core\]" "$PACMAN_CONF"; then
         # Insert before [core] section
-        sed -i "/^\[core\]/i # Jim AUR Repository\n[$REPO_NAME]\nServer = $REPO_URL\nSigLevel = Optional TrustAll\n" "$PACMAN_CONF"
-        print_success "Repository added before [core] section"
+        awk -v repo="$REPO_NAME" -v url="$REPO_URL" '
+        /^\[core\]/ && !inserted {
+            print "# Jim AUR Repository"
+            print "[" repo "]"
+            print "Server = " url
+            print "SigLevel = Optional TrustAll"
+            print ""
+            inserted=1
+        }
+        {print}
+        ' "$PACMAN_CONF" > "$TEMP_CONF"
+        
+        if [ $? -eq 0 ]; then
+            mv "$TEMP_CONF" "$PACMAN_CONF"
+            print_success "Repository added before [core] section"
+        else
+            print_error "Failed to modify pacman.conf"
+            rm -f "$TEMP_CONF"
+            return 1
+        fi
     else
         # Append to end of file if [core] not found
-        echo -e "\n# Jim AUR Repository\n[$REPO_NAME]\nServer = $REPO_URL\nSigLevel = Optional TrustAll" >> "$PACMAN_CONF"
-        print_success "Repository added to end of configuration"
+        {
+            cat "$PACMAN_CONF"
+            echo ""
+            echo "# Jim AUR Repository"
+            echo "[$REPO_NAME]"
+            echo "Server = $REPO_URL"
+            echo "SigLevel = Optional TrustAll"
+        } > "$TEMP_CONF"
+        
+        if [ $? -eq 0 ]; then
+            mv "$TEMP_CONF" "$PACMAN_CONF"
+            print_success "Repository added to end of configuration"
+        else
+            print_error "Failed to modify pacman.conf"
+            rm -f "$TEMP_CONF"
+            return 1
+        fi
     fi
     
     print_success "Repository successfully added to $PACMAN_CONF"
+    return 0
 }
 
 # Function to update repository databases
 update_databases() {
     print_info "Updating package databases..."
-    if pacman -Sy --noconfirm 2>&1 | tee /tmp/pacman_update.log; then
+    
+    if pacman -Sy --noconfirm 2>&1 | tee /tmp/pacman_update.log | grep -v "warning:"; then
         print_success "Package databases updated successfully"
         return 0
     else
-        print_warning "Package database update completed with warnings"
-        print_info "Check /tmp/pacman_update.log for details"
+        print_warning "Package database update completed (check /tmp/pacman_update.log)"
         return 0
     fi
 }
@@ -180,11 +255,15 @@ main() {
         exit 1
     fi
     
+    print_debug "Running as root: OK"
+    
     # Check if we're on Arch Linux
     if ! command -v pacman &> /dev/null; then
         print_error "This script is designed for Arch Linux systems with pacman"
         exit 1
     fi
+    
+    print_debug "Pacman found: OK"
     
     # Check architecture - only x86_64 is supported
     CURRENT_ARCH=$(uname -m)
@@ -199,7 +278,10 @@ main() {
     echo
     
     # Check if repository already exists
+    print_debug "Calling check_repo_exists function..."
     check_repo_exists
+    local check_exit=$?
+    print_debug "check_repo_exists returned: $check_exit, REPO_EXISTS=$REPO_EXISTS"
     echo
     
     if [[ $REPO_EXISTS == true ]]; then
@@ -234,18 +316,28 @@ main() {
         echo
         
         # Setup GPG key
+        print_debug "Starting GPG key setup..."
         fingerprint=$(setup_gpg_key)
+        print_debug "GPG setup completed with fingerprint: $fingerprint"
         echo
         
         # Add repository
-        add_repository
+        print_debug "Starting repository addition..."
+        if add_repository; then
+            print_debug "Repository addition successful"
+        else
+            print_error "Repository addition failed"
+            exit 1
+        fi
         echo
         
         # Update package databases
+        print_debug "Starting database update..."
         update_databases
         echo
         
         # Verify repository
+        print_debug "Starting repository verification..."
         verify_repository
         
         echo
@@ -272,9 +364,17 @@ main() {
     print_info "To remove this repository later, edit $PACMAN_CONF"
     print_info "and remove the [$REPO_NAME] section"
     echo
+    
+    print_success "Script execution completed!"
 }
 
-# Execute main function
-main
+# Trap errors for debugging
+trap 'print_error "Script failed at line $LINENO with exit code $?"' ERR
 
-exit 0
+# Execute main function
+print_debug "Starting script execution..."
+main
+exit_code=$?
+
+print_debug "Script finished with exit code: $exit_code"
+exit $exit_code
