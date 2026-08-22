@@ -20,8 +20,8 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Repository configuration
-REPO_NAME="home_jimedrand_Arch"
-REPO_URL="https://download.opensuse.org/repositories/home:/jimedrand/Arch/\$arch"
+REPO_NAME="home_jimed-rand_archlinux_Arch"
+REPO_URL="https://download.opensuse.org/repositories/home:/jimed-rand:/archlinux/Arch/x86_64/"
 PACMAN_CONF="/etc/pacman.conf"
 REPO_EXISTS=false
 
@@ -48,7 +48,7 @@ print_debug() {
 
 print_header() {
     echo -e "${MAGENTA}+------------------------------------------------------------+${NC}"
-    echo -e "${MAGENTA}|${NC}         ${CYAN}Jim AUR Repository Setup & Update Tool${NC}         ${MAGENTA}|${NC}"
+    echo -e "${MAGENTA}|${NC}         ${CYAN}Jim AUR (Second) Repository Setup & Update Tool${NC}         ${MAGENTA}|${NC}"
     echo -e "${MAGENTA}|${NC}              Author: James Ed Randson                  ${MAGENTA}|${NC}"
     echo -e "${MAGENTA}+------------------------------------------------------------+${NC}"
     echo
@@ -78,9 +78,8 @@ check_repo_exists() {
 setup_gpg_key() {
     print_info "Setting up GPG key for repository..."
     
-    # Get architecture
-    ARCH=$(uname -m)
-    KEY_URL="https://download.opensuse.org/repositories/home:jimedrand/Arch/$ARCH/home_jimedrand_Arch.key"
+    # Get architecture (x86_64 only)
+    KEY_URL="https://download.opensuse.org/repositories/home:/jimed-rand:/archlinux/Arch/x86_64/${REPO_NAME}.key"
     
     print_info "Downloading GPG key from $KEY_URL..."
     
